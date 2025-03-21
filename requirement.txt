@@ -1,0 +1,6 @@
+fastapi
+networkx
+scipy
+svgwrite
+uvicorn 
+opencv-python
