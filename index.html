@@ -1,0 +1,511 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>TortoiseBot2 Drawing System</title>
+    <style>
+        :root {
+            /* NeoVim-inspired color scheme */
+            --bg-primary: #282c34;
+            --bg-secondary: #21252b;
+            --text-primary: #abb2bf;
+            --accent-primary: #61afef;
+            --accent-secondary: #98c379;
+            --border-color: #3e4451;
+            --statusline-bg: #1e2127;
+            --statusline-text: #98c379;
+            --error-color: #e06c75;
+            --warning-color: #e5c07b;
+            --cursor-color: #528bff;
+            --comment-color: #5c6370;
+        }
+        
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+            font-family: 'JetBrains Mono', monospace, 'Fira Code', Consolas, 'Courier New', monospace;
+        }
+        
+        body {
+            background-color: var(--bg-primary);
+            color: var(--text-primary);
+            line-height: 1.6;
+            padding: 0;
+            margin: 0;
+            height: 100vh;
+            display: flex;
+            flex-direction: column;
+        }
+        
+        /* Header styling (like NeoVim tab bar) */
+        header {
+            background-color: var(--bg-secondary);
+            padding: 0.5rem 1rem;
+            border-bottom: 1px solid var(--border-color);
+            display: flex;
+            align-items: center;
+        }
+        
+        header h1 {
+            font-size: 1.2rem;
+            font-weight: normal;
+            color: var(--accent-primary);
+        }
+        
+        header .tab {
+            display: inline-block;
+            padding: 0.2rem 1rem;
+            margin-left: 1rem;
+            background-color: var(--bg-primary);
+            border-top-left-radius: 3px;
+            border-top-right-radius: 3px;
+            border: 1px solid var(--border-color);
+            border-bottom: none;
+            color: var(--accent-secondary);
+        }
+        
+        /* Main content styling */
+        main {
+            flex: 1;
+            padding: 2rem;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            overflow-y: auto;
+        }
+        
+        /* Line numbers like NeoVim */
+        .editor-container {
+            display: flex;
+            width: 90%;
+            max-width: 900px;
+            border: 1px solid var(--border-color);
+            border-radius: 4px;
+            margin-top: 2rem;
+            background-color: var(--bg-secondary);
+        }
+        
+        .line-numbers {
+            padding: 1rem 0.5rem;
+            background-color: var(--bg-secondary);
+            color: var(--comment-color);
+            text-align: right;
+            user-select: none;
+            min-width: 40px;
+            border-right: 1px solid var(--border-color);
+        }
+        
+        .editor-content {
+            padding: 1rem;
+            flex: 1;
+        }
+        
+        h2 {
+            color: var(--accent-secondary);
+            font-weight: normal;
+            margin-bottom: 1.5rem;
+            font-size: 1.5rem;
+        }
+        
+        /* Upload form styling */
+        .upload-form {
+            width: 100%;
+            margin-bottom: 2rem;
+        }
+        
+        .form-group {
+            margin-bottom: 1rem;
+        }
+        
+        .form-group label {
+            display: block;
+            margin-bottom: 0.5rem;
+            color: var(--accent-primary);
+        }
+        
+        .file-input-container {
+            position: relative;
+            overflow: hidden;
+            display: inline-block;
+        }
+        
+        .file-input {
+            position: absolute;
+            left: 0;
+            top: 0;
+            opacity: 0;
+            cursor: pointer;
+            width: 100%;
+            height: 100%;
+        }
+        
+        .file-input-label {
+            display: inline-block;
+            padding: 0.5rem 1rem;
+            background-color: var(--accent-primary);
+            color: var(--bg-primary);
+            border-radius: 3px;
+            cursor: pointer;
+            transition: background-color 0.2s;
+        }
+        
+        .file-input-label:hover {
+            background-color: var(--accent-secondary);
+        }
+        
+        .file-name {
+            margin-left: 1rem;
+            color: var(--text-primary);
+        }
+        
+        .btn {
+            padding: 0.5rem 1rem;
+            background-color: var(--accent-primary);
+            color: var(--bg-primary);
+            border: none;
+            border-radius: 3px;
+            cursor: pointer;
+            font-size: 1rem;
+            transition: background-color 0.2s;
+        }
+        
+        .btn:hover {
+            background-color: var(--accent-secondary);
+        }
+        
+        /* Results section */
+        .results {
+            margin-top: 2rem;
+            width: 100%;
+            display: none;
+        }
+        
+        .results h3 {
+            color: var(--accent-secondary);
+            margin-bottom: 1rem;
+        }
+        
+        .image-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+            gap: 1rem;
+            width: 100%;
+        }
+        
+        .image-card {
+            border: 1px solid var(--border-color);
+            border-radius: 4px;
+            overflow: hidden;
+            background-color: var(--bg-secondary);
+        }
+        
+        .image-card-header {
+            background-color: var(--statusline-bg);
+            padding: 0.5rem;
+            color: var(--statusline-text);
+            font-size: 0.9rem;
+        }
+        
+        .image-container {
+            padding: 1rem;
+            text-align: center;
+        }
+        
+        .image-container img {
+            max-width: 100%;
+            max-height: 250px;
+            object-fit: contain;
+        }
+        
+        /* Status bar like NeoVim */
+        footer {
+            background-color: var(--statusline-bg);
+            padding: 0.5rem 1rem;
+            border-top: 1px solid var(--border-color);
+            display: flex;
+            justify-content: space-between;
+            font-size: 0.9rem;
+        }
+        
+        footer .status {
+            color: var(--statusline-text);
+        }
+        
+        footer .position {
+            color: var(--accent-primary);
+        }
+        
+        /* Loading spinner */
+        .spinner {
+            width: 40px;
+            height: 40px;
+            margin: 20px auto;
+            border: 3px solid rgba(150, 150, 150, 0.2);
+            border-top-color: var(--accent-primary);
+            border-radius: 50%;
+            animation: spin 1s ease-in-out infinite;
+            display: none;
+        }
+        
+        @keyframes spin {
+            to { transform: rotate(360deg); }
+        }
+        
+        /* Error/message display */
+        .message {
+            margin: 1rem 0;
+            padding: 0.5rem 1rem;
+            border-radius: 3px;
+            border-left: 4px solid var(--accent-primary);
+            background-color: rgba(97, 175, 239, 0.1);
+        }
+        
+        .message.error {
+            border-left-color: var(--error-color);
+            background-color: rgba(224, 108, 117, 0.1);
+            color: var(--error-color);
+        }
+    </style>
+    <!-- Load JetBrains Mono from Google Fonts -->
+    <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;700&display=swap" rel="stylesheet">
+</head>
+<body>
+    <header>
+        <h1>TortoiseBot2</h1>
+        <div class="tab">drawing-system.py</div>
+    </header>
+    
+    <main>
+        <h2>// Drawing System</h2>
+        
+        <div class="editor-container">
+            <div class="line-numbers">
+                <div>1</div>
+                <div>2</div>
+                <div>3</div>
+                <div>4</div>
+                <div>5</div>
+                <div>6</div>
+            </div>
+            <div class="editor-content">
+                <p>"""</p>
+                <p><span style="color: var(--accent-secondary);">TortoiseBot2 Drawing System</span></p>
+                <p>Upload an image to convert it to robot drawing paths.</p>
+                <p>The system will process your image and generate optimized drawing paths.</p>
+                <p>"""</p>
+            </div>
+        </div>
+        
+        <div class="editor-container">
+            <div class="line-numbers">
+                <div>7</div>
+                <div>8</div>
+                <div>9</div>
+                <div>10</div>
+                <div>11</div>
+                <div>12</div>
+            </div>
+            <div class="editor-content">
+                <div class="upload-form">
+                    <div class="form-group">
+                        <label># Upload your drawing</label>
+                        <div class="file-input-container">
+                            <span class="file-input-label">Choose File</span>
+                            <input type="file" id="image-input" class="file-input" accept="image/*">
+                            <span id="file-name" class="file-name">No file chosen</span>
+                        </div>
+                    </div>
+                    <button id="upload-btn" class="btn">Process Image</button>
+                    <div id="spinner" class="spinner"></div>
+                    <div id="message" class="message" style="display: none;"></div>
+                </div>
+            </div>
+        </div>
+        
+        <div id="results" class="results editor-container">
+            <div class="line-numbers">
+                <div>13</div>
+                <div>14</div>
+                <div>15</div>
+                <div>16</div>
+                <div>17</div>
+                <div>18</div>
+                <div>19</div>
+                <div>20</div>
+                <div>21</div>
+                <div>22</div>
+            </div>
+            <div class="editor-content">
+                <h3># Processed Results</h3>
+                <div id="stats-container" style="margin-bottom: 1rem; color: var(--accent-primary);"></div>
+                <div class="image-grid">
+                    <!-- Images will be inserted here by JavaScript -->
+                </div>
+                <div id="download-container" style="margin-top: 2rem;">
+                    <h3 style="margin-bottom: 1rem;"># Generated Files</h3>
+                    <div id="download-links" style="display: flex; gap: 1rem;">
+                        <!-- Download links will be inserted here by JavaScript -->
+                    </div>
+                </div>
+            </div>
+        </div>
+    </main>
+    
+    <footer>
+        <div class="status">NORMAL</div>
+        <div class="position">TortoiseBot2 Drawing System v1.0</div>
+    </footer>
+    
+    <script>
+        document.addEventListener('DOMContentLoaded', function() {
+            const fileInput = document.getElementById('image-input');
+            const fileName = document.getElementById('file-name');
+            const uploadBtn = document.getElementById('upload-btn');
+            const spinner = document.getElementById('spinner');
+            const messageDisplay = document.getElementById('message');
+            const resultsSection = document.getElementById('results');
+            const imageGrid = document.querySelector('.image-grid');
+            const statsContainer = document.getElementById('stats-container');
+            const downloadLinks = document.getElementById('download-links');
+            
+            // Update file name display when file is selected
+            fileInput.addEventListener('change', function() {
+                if (this.files && this.files[0]) {
+                    fileName.textContent = this.files[0].name;
+                } else {
+                    fileName.textContent = 'No file chosen';
+                }
+                
+                // Hide previous results
+                resultsSection.style.display = 'none';
+                messageDisplay.style.display = 'none';
+            });
+            
+            // Handle image upload and processing
+            uploadBtn.addEventListener('click', function() {
+                if (!fileInput.files || !fileInput.files[0]) {
+                    showMessage('Please select an image file first', true);
+                    return;
+                }
+                
+                const file = fileInput.files[0];
+                const formData = new FormData();
+                formData.append('file', file);
+                
+                // Show loading spinner
+                spinner.style.display = 'block';
+                messageDisplay.style.display = 'none';
+                resultsSection.style.display = 'none';
+                uploadBtn.disabled = true;
+                
+                // Send request to server
+                fetch('/upload/', {
+                    method: 'POST',
+                    body: formData
+                })
+                .then(response => {
+                    if (!response.ok) {
+                        return response.json().then(err => { throw new Error(err.detail || 'Upload failed'); });
+                    }
+                    return response.json();
+                })
+                .then(data => {
+                    // Display processed images and stats
+                    displayResults(data);
+                    showMessage('Image processed successfully');
+                })
+                .catch(error => {
+                    showMessage(error.message, true);
+                })
+                .finally(() => {
+                    // Hide spinner and re-enable upload button
+                    spinner.style.display = 'none';
+                    uploadBtn.disabled = false;
+                });
+            });
+            
+            function showMessage(text, isError = false) {
+                messageDisplay.textContent = text;
+                messageDisplay.style.display = 'block';
+                if (isError) {
+                    messageDisplay.className = 'message error';
+                } else {
+                    messageDisplay.className = 'message';
+                }
+            }
+            
+            function displayResults(data) {
+                // Clear previous results
+                imageGrid.innerHTML = '';
+                statsContainer.innerHTML = '';
+                downloadLinks.innerHTML = '';
+                
+                // Display stats
+                if (data.stats) {
+                    statsContainer.innerHTML = `
+                        <span># Paths: ${data.stats.numPaths}</span> | 
+                        <span>Image Size: ${data.stats.imageSize.width}×${data.stats.imageSize.height}px</span>
+                    `;
+                }
+                
+                // Create image cards for each processed image
+                const images = [
+                    { url: data.processed.binary, title: 'Binary Image' },
+                    { url: data.processed.edges, title: 'Edge Detection' },
+                    { url: data.processed.contours, title: 'Detected Contours' }
+                ];
+                
+                // Add path order visualization if available
+                if (data.processed.pathOrder) {
+                    images.push({ url: data.processed.pathOrder, title: 'Optimized Path Order' });
+                }
+                
+                images.forEach(img => {
+                    const card = document.createElement('div');
+                    card.className = 'image-card';
+                    
+                    const header = document.createElement('div');
+                    header.className = 'image-card-header';
+                    header.textContent = img.title;
+                    
+                    const container = document.createElement('div');
+                    container.className = 'image-container';
+                    
+                    const imgElement = document.createElement('img');
+                    imgElement.src = img.url;
+                    imgElement.alt = img.title;
+                    
+                    container.appendChild(imgElement);
+                    card.appendChild(header);
+                    card.appendChild(container);
+                    imageGrid.appendChild(card);
+                });
+                
+                // Add download links
+                if (data.processed.svg) {
+                    addDownloadLink('SVG Vector', data.processed.svg, 'var(--accent-secondary)');
+                }
+                
+                if (data.processed.gcode) {
+                    addDownloadLink('G-code', data.processed.gcode, 'var(--accent-primary)');
+                }
+                
+                // Show results section
+                resultsSection.style.display = 'flex';
+            }
+            
+            function addDownloadLink(title, url, color) {
+                const link = document.createElement('a');
+                link.href = url;
+                link.download = url.split('/').pop();
+                link.className = 'btn';
+                link.innerHTML = `<span style="margin-right: 5px;">⬇️</span> ${title}`;
+                link.style.backgroundColor = color;
+                downloadLinks.appendChild(link);
+            }
+        });
+    </script>
+</body>
+</html>
