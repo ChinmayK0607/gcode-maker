@@ -267,6 +267,22 @@
             background-color: rgba(224, 108, 117, 0.1);
             color: var(--error-color);
         }
+
+        .config-input {
+            width: 100%;
+            padding: 0.3rem;
+            background-color: var(--bg-secondary);
+            color: var(--text-primary);
+            border: 1px solid var(--border-color);
+            border-radius: 3px;
+            font-family: inherit;
+            margin-top: 0.25rem;
+        }
+
+        .config-input:focus {
+            outline: none;
+            border-color: var(--accent-primary);
+        }
     </style>
     <!-- Load JetBrains Mono from Google Fonts -->
     <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;700&display=swap" rel="stylesheet">
@@ -315,6 +331,31 @@
                             <span class="file-input-label">Choose File</span>
                             <input type="file" id="image-input" class="file-input" accept="image/*">
                             <span id="file-name" class="file-name">No file chosen</span>
+                        </div>
+                    </div>
+                    <div class="form-group">
+                        <label># Configuration Options</label>
+                        <div class="config-panel" style="display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; margin-bottom: 1rem;">
+                            <div>
+                                <label style="color: var(--text-primary);">Drawing Width (mm)</label>
+                                <input type="number" id="robot-width" value="100" min="50" max="300" class="config-input">
+                            </div>
+                            <div>
+                                <label style="color: var(--text-primary);">Drawing Height (mm)</label>
+                                <input type="number" id="robot-height" value="100" min="50" max="300" class="config-input">
+                            </div>
+                            <div>
+                                <label style="color: var(--text-primary);">Drawing Speed (mm/min)</label>
+                                <input type="number" id="drawing-speed" value="1000" min="500" max="3000" step="100" class="config-input">
+                            </div>
+                            <div>
+                                <label style="color: var(--text-primary);">Travel Speed (mm/min)</label>
+                                <input type="number" id="travel-speed" value="3000" min="1000" max="5000" step="100" class="config-input">
+                            </div>
+                            <div>
+                                <label style="color: var(--text-primary);">Pen Offset (m)</label>
+                                <input type="number" id="pen-offset" value="0.033" min="0" max="0.1" step="0.001" class="config-input">
+                            </div>
                         </div>
                     </div>
                     <button id="upload-btn" class="btn">Process Image</button>
@@ -383,7 +424,7 @@
                 messageDisplay.style.display = 'none';
             });
             
-            // Handle image upload and processing
+            // Modify the upload button event handler to include the pen offset parameter
             uploadBtn.addEventListener('click', function() {
                 if (!fileInput.files || !fileInput.files[0]) {
                     showMessage('Please select an image file first', true);
@@ -393,6 +434,20 @@
                 const file = fileInput.files[0];
                 const formData = new FormData();
                 formData.append('file', file);
+                
+                // Get configuration values
+                const robotWidth = document.getElementById('robot-width').value;
+                const robotHeight = document.getElementById('robot-height').value;
+                const drawingSpeed = document.getElementById('drawing-speed').value;
+                const travelSpeed = document.getElementById('travel-speed').value;
+                const penOffset = document.getElementById('pen-offset').value;
+                
+                // Add these parameters to the form data
+                formData.append('robot_width', robotWidth);
+                formData.append('robot_height', robotHeight);
+                formData.append('drawing_speed', drawingSpeed);
+                formData.append('travel_speed', travelSpeed);
+                formData.append('pen_offset_y', penOffset);
                 
                 // Show loading spinner
                 spinner.style.display = 'block';
@@ -436,6 +491,7 @@
                 }
             }
             
+            // Modify the displayResults function to show the pen offset
             function displayResults(data) {
                 // Clear previous results
                 imageGrid.innerHTML = '';
@@ -446,9 +502,13 @@
                 if (data.stats) {
                     statsContainer.innerHTML = `
                         <span># Paths: ${data.stats.numPaths}</span> | 
-                        <span>Image Size: ${data.stats.imageSize.width}×${data.stats.imageSize.height}px</span>
+                        <span>Image: ${data.stats.imageSize.width}×${data.stats.imageSize.height}px</span> |
+                        <span>Drawing: ${data.stats.drawingSize.width}×${data.stats.drawingSize.height}${data.stats.drawingSize.units}</span> |
+                        <span>Pen Offset: ${data.stats.penOffset.y}${data.stats.penOffset.units}</span>
                     `;
                 }
+                
+                // Rest of the function remains the same...
                 
                 // Create image cards for each processed image
                 const images = [
