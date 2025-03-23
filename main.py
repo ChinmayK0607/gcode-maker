@@ -88,6 +88,85 @@ def preprocess_image(image_path, output_path, target_width=800):
         logger.error(f"Image processing error: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Image processing failed: {str(e)}")
 
+def preprocess_contours(contours, distance_threshold=10):
+    """
+    Preprocess contours to improve drawing quality:
+    - Merge contours that are very close to each other
+    - Remove tiny contours that would be hard to draw
+    - Sort by size to prioritize larger features
+    
+    Args:
+        contours: List of contours from OpenCV
+        distance_threshold: Maximum distance to merge contours
+        
+    Returns:
+        List of preprocessed contours
+    """
+    if not contours or len(contours) <= 1:
+        return contours
+    
+    # Filter out very small contours
+    min_points = 3
+    min_area = 30
+    filtered_contours = []
+    
+    for contour in contours:
+        area = cv2.contourArea(contour)
+        if len(contour) >= min_points and area >= min_area:
+            filtered_contours.append(contour)
+    
+    # Find contours that could be merged (endpoints very close to each other)
+    merged_contours = []
+    used_indices = set()
+    
+    for i in range(len(filtered_contours)):
+        if i in used_indices:
+            continue
+            
+        used_indices.add(i)
+        current_contour = filtered_contours[i].copy()
+        
+        # Try to extend this contour by finding others that connect to it
+        while True:
+            current_end = current_contour[-1][0]
+            found_merge = False
+            
+            for j in range(len(filtered_contours)):
+                if j in used_indices:
+                    continue
+                
+                # Check if the start of contour j is close to the end of current contour
+                next_start = filtered_contours[j][0][0]
+                if math.dist(current_end, next_start) <= distance_threshold:
+                    # Merge contours
+                    for point in filtered_contours[j]:
+                        current_contour = np.append(current_contour, [point], axis=0)
+                    
+                    used_indices.add(j)
+                    found_merge = True
+                    break
+                    
+                # Check if the end of contour j is close to the end of current contour
+                next_end = filtered_contours[j][-1][0]
+                if math.dist(current_end, next_end) <= distance_threshold:
+                    # Merge contours (reverse the second one)
+                    reverse_contour = np.flip(filtered_contours[j], axis=0)
+                    for point in reverse_contour:
+                        current_contour = np.append(current_contour, [point], axis=0)
+                    
+                    used_indices.add(j)
+                    found_merge = True
+                    break
+            
+            if not found_merge:
+                break
+        
+        merged_contours.append(current_contour)
+    
+    # Return the merged contours
+    logger.info(f"Contour preprocessing: {len(contours)} -> {len(merged_contours)} contours")
+    return merged_contours
+
 def detect_contours(binary_image_path, output_path):
     """Extract contours from binary image and visualize them"""
     try:
@@ -99,25 +178,28 @@ def detect_contours(binary_image_path, output_path):
             binary, cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE
         )
         
-        # Filter small contours (noise)
+        # Filter small contours (noise) and apply Douglas-Peucker algorithm
         min_area = 20
         filtered_contours = []
         for c in contours:
             if cv2.contourArea(c) >= min_area:
-                # Also simplify contours to reduce points (Douglas-Peucker algorithm)
+                # Simplify contours to reduce points (Douglas-Peucker algorithm)
                 epsilon = 0.002 * cv2.arcLength(c, True)
                 approx = cv2.approxPolyDP(c, epsilon, True)
                 filtered_contours.append(approx)
         
+        # Preprocess contours (merge nearby ones)
+        processed_contours = preprocess_contours(filtered_contours, distance_threshold=10)
+        
         # Create visualization image
         vis_img = cv2.cvtColor(binary, cv2.COLOR_GRAY2BGR)
-        cv2.drawContours(vis_img, filtered_contours, -1, (0, 255, 0), 2)
+        cv2.drawContours(vis_img, processed_contours, -1, (0, 255, 0), 2)
         
         # Save contour visualization
         cv2.imwrite(output_path, vis_img)
         
-        logger.info(f"Detected {len(filtered_contours)} contours")
-        return filtered_contours, output_path
+        logger.info(f"Detected {len(processed_contours)} contours")
+        return processed_contours, output_path
     except Exception as e:
         logger.error(f"Contour detection error: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Contour detection failed: {str(e)}")
@@ -303,7 +385,12 @@ def optimize_path_order(contours) -> Tuple[List[int], List[bool]]:
 
 # G-code generation
 def generate_gcode(contours, path_order, path_reverse, image_shape, output_path, 
-                  robot_width=200, robot_height=200, pen_up=5, pen_down=0):
+                  robot_width=100, robot_height=100,  # Reduced default size
+                  pen_up=5, pen_down=0,
+                  margin_percent=10,  # Margin from edges as percentage
+                  travel_speed=3000,
+                  drawing_speed=1000,  # Slower drawing speed for better accuracy
+                  pen_offset_y=0.033):  # Offset from center of TurtleBot Burger to pen position in meters
     """
     Generate G-code for drawing the optimized contour paths
     
@@ -317,13 +404,55 @@ def generate_gcode(contours, path_order, path_reverse, image_shape, output_path,
         robot_height: Height of robot drawing area in mm
         pen_up: Z-position for pen up
         pen_down: Z-position for pen down
+        margin_percent: Percentage of margin to leave around drawing
+        travel_speed: Speed for travel moves (mm/min)
+        drawing_speed: Speed for drawing moves (mm/min)
+        pen_offset_y: Offset from center of TurtleBot to pen position in meters
     """
     try:
         height, width = image_shape[:2]
         
-        # Scale factors to convert from pixel space to robot space
-        scale_x = robot_width / width
-        scale_y = robot_height / height
+        # Find bounding box of all contours to center the drawing
+        min_x, min_y = float('inf'), float('inf')
+        max_x, max_y = float('-inf'), float('-inf')
+        
+        for contour in contours:
+            if len(contour) < 1:
+                continue
+            
+            for point in contour:
+                x, y = point[0]
+                min_x = min(min_x, x)
+                min_y = min(min_y, y)
+                max_x = max(max_x, x)
+                max_y = max(max_y, y)
+        
+        # Calculate drawing dimensions and scale factor
+        drawing_width = max_x - min_x
+        drawing_height = max_y - min_y
+        
+        # Calculate margins
+        margin_x = robot_width * (margin_percent / 100.0)
+        margin_y = robot_height * (margin_percent / 100.0)
+        
+        # Calculate maximum available space
+        available_width = robot_width - 2 * margin_x
+        available_height = robot_height - 2 * margin_y
+        
+        # Calculate scale factor to fit drawing within available space
+        scale_x = available_width / drawing_width if drawing_width > 0 else 1.0
+        scale_y = available_height / drawing_height if drawing_height > 0 else 1.0
+        
+        # Use the smaller scale factor to maintain aspect ratio
+        scale = min(scale_x, scale_y) * 0.95  # 5% additional safety factor
+        
+        # Convert pen offset from meters to mm (G-code units)
+        pen_offset_mm = pen_offset_y * 1000
+        
+        logger.info(f"Drawing dimensions: {drawing_width}x{drawing_height} pixels")
+        logger.info(f"Available space: {available_width}x{available_height} mm")
+        logger.info(f"Scale factor: {scale}")
+        logger.info(f"Pen offset: {pen_offset_mm} mm")
         
         # Initialize G-code with header
         gcode = []
@@ -331,13 +460,30 @@ def generate_gcode(contours, path_order, path_reverse, image_shape, output_path,
         gcode.append("; Original image dimensions: " + str(width) + "x" + str(height) + " pixels")
         gcode.append("; Drawing area: " + str(robot_width) + "x" + str(robot_height) + " mm")
         gcode.append("; Number of paths: " + str(len(path_order)))
+        gcode.append("; Scale factor: " + str(scale))
+        gcode.append("; Pen offset from center: " + str(pen_offset_mm) + " mm")
         gcode.append("")
         gcode.append("G90 ; Use absolute positioning")
         gcode.append("G21 ; Set units to millimeters")
         gcode.append("G28 ; Home all axes")
         gcode.append(f"G0 Z{pen_up} F1000 ; Raise pen")
-        gcode.append("G0 F3000 ; Set travel speed")
+        gcode.append(f"G0 F{travel_speed} ; Set travel speed")
         gcode.append("")
+        
+        # Transform function to convert from image to robot coordinates
+        # This now accounts for the pen offset
+        def transform_point(x, y):
+            # Scale and center the point
+            robot_x = margin_x + ((x - min_x) * scale)
+            # Invert Y (robot coordinate system has origin at bottom-left)
+            robot_y = margin_y + ((max_y - y) * scale)
+            
+            # Compensate for pen offset - adjust the Y coordinate
+            # The robot must position itself so that the pen (offset by pen_offset_mm) 
+            # is at the target coordinates
+            robot_y -= pen_offset_mm
+            
+            return robot_x, robot_y
         
         # Generate G-code for each contour in the optimized order
         for i, idx in enumerate(path_order):
@@ -353,9 +499,8 @@ def generate_gcode(contours, path_order, path_reverse, image_shape, output_path,
             points = []
             for point in contour:
                 x, y = point[0]
-                # Scale to robot coordinates and invert Y (robot coordinate system origin is bottom-left)
-                robot_x = x * scale_x
-                robot_y = (height - y) * scale_y  # Invert Y
+                # Transform to robot coordinates
+                robot_x, robot_y = transform_point(x, y)
                 points.append((robot_x, robot_y))
             
             # Reverse points if needed
@@ -364,13 +509,13 @@ def generate_gcode(contours, path_order, path_reverse, image_shape, output_path,
             
             # Move to start point with pen up
             start_x, start_y = points[0]
-            gcode.append(f"G0 X{start_x:.3f} Y{start_y:.3f} ; Move to start of path {i+1}")
+            gcode.append(f"G0 X{start_x:.2f} Y{start_y:.2f} ; Move to start of path {i+1}")
             gcode.append(f"G0 Z{pen_down} F1000 ; Lower pen")
-            gcode.append("G1 F1500 ; Set drawing speed")
+            gcode.append(f"G1 F{drawing_speed} ; Set drawing speed")
             
             # Draw the path
             for x, y in points[1:]:
-                gcode.append(f"G1 X{x:.3f} Y{y:.3f}")
+                gcode.append(f"G1 X{x:.2f} Y{y:.2f}")
             
             # Lift pen after path
             gcode.append(f"G0 Z{pen_up} F1000 ; Raise pen")
@@ -391,7 +536,6 @@ def generate_gcode(contours, path_order, path_reverse, image_shape, output_path,
     except Exception as e:
         logger.error(f"G-code generation error: {str(e)}")
         raise HTTPException(status_code=500, detail=f"G-code generation failed: {str(e)}")
-
 # Routes
 @app.get("/", response_class=HTMLResponse)
 async def get_index():
@@ -405,7 +549,14 @@ async def get_index():
         return HTMLResponse(content="<h1>Error loading page</h1><p>Please check server logs</p>", status_code=500)
 
 @app.post("/upload/")
-async def upload_image(file: UploadFile = File(...)):
+async def upload_image(
+    file: UploadFile = File(...),
+    robot_width: float = 100,     # Default to 100mm drawing width
+    robot_height: float = 100,    # Default to 100mm drawing height
+    drawing_speed: int = 1000,    # Default drawing speed
+    travel_speed: int = 3000,     # Default travel speed
+    pen_offset_y: float = 0.033   # Default 33mm pen offset for TurtleBot Burger
+):
     """
     Upload and process an image through the complete drawing pipeline:
     1. Preprocess image
@@ -461,9 +612,20 @@ async def upload_image(file: UploadFile = File(...)):
         path_vis_output = os.path.join(PROCESSED_DIR, f"{file_id}_path_order.png")
         path_vis_path = visualize_path_order(contours, path_order, img_shape, path_vis_output)
         
-        # Step 5: Generate G-code
+        # Step 5: Generate G-code with the provided parameters
         gcode_output = os.path.join(GCODE_DIR, f"{file_id}.gcode")
-        gcode_path = generate_gcode(contours, path_order, path_reverse, img_shape, gcode_output)
+        gcode_path = generate_gcode(
+            contours, 
+            path_order, 
+            path_reverse, 
+            img_shape, 
+            gcode_output,
+            robot_width=robot_width,
+            robot_height=robot_height,
+            drawing_speed=drawing_speed,
+            travel_speed=travel_speed,
+            pen_offset_y=pen_offset_y
+        )
         
         # Return paths to processed files
         return {
@@ -479,7 +641,16 @@ async def upload_image(file: UploadFile = File(...)):
             "stats": {
                 "numPaths": len(contours),
                 "imageSize": {"width": img_shape[1], "height": img_shape[0]},
-                "optimalPathLength": len(path_order)
+                "optimalPathLength": len(path_order),
+                "drawingSize": {
+                    "width": robot_width,
+                    "height": robot_height,
+                    "units": "mm"
+                },
+                "penOffset": {
+                    "y": pen_offset_y,
+                    "units": "m"
+                }
             },
             "message": "Image processed successfully"
         }
@@ -489,7 +660,6 @@ async def upload_image(file: UploadFile = File(...)):
             status_code=500, 
             detail=f"Image processing pipeline failed: {str(e)}"
         )
-
 @app.get("/processed/{filename}")
 async def get_processed_image(filename: str):
     """Serve processed images"""
